@@ -2,6 +2,7 @@ import os
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from langchain.schema import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,6 +17,14 @@ load_dotenv(find_dotenv())
 
 app = FastAPI()
 
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Allow frontend origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 def get_env_variable(var_name: str) -> str:
     value = os.getenv(var_name)
@@ -75,11 +84,15 @@ async def add_documents(documents: list[DocumentModel]):
         docs = [
             Document(
                 page_content=doc.page_content,
-                metadata=(
-                    {**doc.metadata, "digest": doc.generate_digest()}
-                    if doc.metadata
-                    else {"digest": doc.generate_digest()}
-                ),
+                metadata={
+                    **doc.metadata,
+                    "digest": doc.generate_digest(),
+                    "room_number": doc.room_number,
+                    "description": doc.description,
+                    "room_size": doc.room_size,
+                    "image_url": doc.image_url,
+                    "is_booked": doc.is_booked
+                },
             )
             for doc in documents
         ]
@@ -148,3 +161,21 @@ async def delete_documents(ids: list[str]):
 async def quick_response(msg: str):
     result = chain.invoke(msg)
     return result
+
+@app.get("/get-documents/", response_model=list[DocumentResponse])
+async def get_documents(skip: int = 0, limit: int = 10):
+    try:
+        if isinstance(pgvector_store, AsnyPgVector):
+            ids = await pgvector_store.get_all_ids()
+            # Apply pagination
+            paginated_ids = ids[skip:skip+limit]
+            documents = await pgvector_store.get_documents_by_ids(paginated_ids)
+        else:
+            ids = pgvector_store.get_all_ids()
+            # Apply pagination
+            paginated_ids = ids[skip:skip+limit]
+            documents = pgvector_store.get_documents_by_ids(paginated_ids)
+
+        return documents
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
