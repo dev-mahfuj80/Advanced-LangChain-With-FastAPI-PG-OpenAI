@@ -63,9 +63,26 @@ try:
     Question: {question}
     """
     prompt = ChatPromptTemplate.from_template(template)
-    model = ChatOpenAI(model_name="gpt-3.5-turbo")
+    model = ChatOpenAI(model_name="gpt-4")
+    # --- Add tool definition ---
+    def add_tool(a: int, b: int) -> str:
+        return str(a + b)
+
+    # --- Add tool usage in chain context ---
+    from langchain.tools import Tool
+    tools = [
+        Tool(
+            name="add",
+            func=lambda x: add_tool(x["a"], x["b"]),
+            description="Add two numbers. Input: {\"a\": int, \"b\": int}"
+        )
+    ]
+
+    # If you want to use tools in the chain, you need to use an agent or similar pattern.
+    # For now, just expose the function in the context for prompt use.
+
     chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
+        {"context": retriever, "question": RunnablePassthrough(), "add": add_tool}
         | prompt
         | model
         | StrOutputParser()
@@ -78,30 +95,24 @@ except Exception as e:
     raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/add-documents/")
-async def add_documents(documents: list[DocumentModel]):
+@app.post("/add-rooms/")
+async def add_rooms(rooms: list[DocumentModel]):
     try:
         docs = [
             Document(
-                page_content=doc.page_content,
+                page_content=doc.room_name,
                 metadata={
                     **doc.metadata,
-                    "digest": doc.generate_digest(),
-                    "room_number": doc.room_number,
-                    "description": doc.description,
-                    "room_size": doc.room_size,
-                    "image_url": doc.image_url,
-                    "is_booked": doc.is_booked
                 },
             )
-            for doc in documents
+            for doc in rooms
         ]
         ids = (
-            await pgvector_store.aadd_documents(docs)
+            await pgvector_store.aadd_rooms(docs)
             if isinstance(pgvector_store, AsnyPgVector)
-            else pgvector_store.add_documents(docs)
+            else pgvector_store.add_rooms(docs)
         )
-        return {"message": "Documents added successfully", "ids": ids}
+        return {"message": "rooms added successfully", "ids": ids}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -119,28 +130,28 @@ async def get_all_ids():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/get-documents-by-ids/", response_model=list[DocumentResponse])
-async def get_documents_by_ids(ids: list[str]):
+@app.post("/get-rooms-by-ids/", response_model=list[DocumentResponse])
+async def get_rooms_by_ids(ids: list[str]):
     try:
         if isinstance(pgvector_store, AsnyPgVector):
             existing_ids = await pgvector_store.get_all_ids()
-            documents = await pgvector_store.get_documents_by_ids(ids)
+            rooms = await pgvector_store.get_rooms_by_ids(ids)
         else:
             existing_ids = pgvector_store.get_all_ids()
-            documents = pgvector_store.get_documents_by_ids(ids)
+            rooms = pgvector_store.get_rooms_by_ids(ids)
 
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
 
-        return documents
+        return rooms
     except HTTPException as http_exc:
         raise http_exc
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/delete-documents/")
-async def delete_documents(ids: list[str]):
+@app.delete("/delete-room/")
+async def delete_rooms(ids: list[str]):
     try:
         if isinstance(pgvector_store, AsnyPgVector):
             existing_ids = await pgvector_store.get_all_ids()
@@ -152,10 +163,42 @@ async def delete_documents(ids: list[str]):
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
 
-        return {"message": f"{len(ids)} documents deleted successfully"}
+        return {"message": f"{len(ids)} rooms deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/get-rooms/", response_model=list[DocumentResponse])
+async def get_rooms(skip: int = 0, limit: int = 10):
+    try:
+        if isinstance(pgvector_store, AsnyPgVector):
+            ids = await pgvector_store.get_all_ids()
+            # Apply pagination
+            paginated_ids = ids[skip:skip+limit]
+            langchain_docs = await pgvector_store.get_rooms_by_ids(paginated_ids)
+        else:
+            ids = pgvector_store.get_all_ids()
+            # Apply pagination
+            paginated_ids = ids[skip:skip+limit]
+            langchain_docs = pgvector_store.get_rooms_by_ids(paginated_ids)
+        
+        # Convert LangChain Document objects to DocumentResponse objects
+        rooms = []
+        for doc in langchain_docs:
+            metadata = doc.metadata
+            rooms.append(DocumentResponse(
+                room_name=metadata.get("room_name", ""),
+                room_number=metadata.get("room_number", ""),
+                description=metadata.get("description", ""),
+                room_size=metadata.get("room_size", 0.0),
+                image_url=metadata.get("image_url"),
+                is_booked=metadata.get("is_booked", False),
+                metadata=metadata
+            ))
+            
+        return rooms
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Simple in-memory conversation memory
 dialogue_memory = {}
@@ -175,20 +218,3 @@ async def quick_response(msg: str, session_id: str):
     dialogue_memory[session_id] = history
     return result
 
-@app.get("/get-documents/", response_model=list[DocumentResponse])
-async def get_documents(skip: int = 0, limit: int = 10):
-    try:
-        if isinstance(pgvector_store, AsnyPgVector):
-            ids = await pgvector_store.get_all_ids()
-            # Apply pagination
-            paginated_ids = ids[skip:skip+limit]
-            documents = await pgvector_store.get_documents_by_ids(paginated_ids)
-        else:
-            ids = pgvector_store.get_all_ids()
-            # Apply pagination
-            paginated_ids = ids[skip:skip+limit]
-            documents = pgvector_store.get_documents_by_ids(paginated_ids)
-
-        return documents
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

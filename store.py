@@ -12,12 +12,12 @@ class ExtendedPgVector(PGVector):
 
     def get_all_ids(self) -> list[str]:
         time.sleep(5)
-
+        
         with Session(self._bind) as session:
             results = session.query(self.EmbeddingStore.custom_id).all()
             return [result[0] for result in results if result[0] is not None]
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+    def get_rooms_by_ids(self, ids: list[str]) -> list[Document]:
 
         with Session(self._bind) as session:
             results = (
@@ -38,8 +38,8 @@ class AsnyPgVector(ExtendedPgVector):
         await asyncio.sleep(5)
         return await run_in_executor(None, super().get_all_ids)
 
-    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        return await run_in_executor(None, super().get_documents_by_ids, ids)
+    async def get_rooms_by_ids(self, ids: list[str]) -> list[Document]:
+        return await run_in_executor(None, super().get_rooms_by_ids, ids)
 
     async def delete(
         self,
