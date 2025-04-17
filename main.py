@@ -157,9 +157,22 @@ async def delete_documents(ids: list[str]):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Simple in-memory conversation memory
+dialogue_memory = {}
+
 @app.post("/chat/")
-async def quick_response(msg: str):
-    result = chain.invoke(msg)
+async def quick_response(msg: str, session_id: str):
+    # Get history for session_id
+    history = dialogue_memory.get(session_id, [])
+    # Prepare context string from history
+    context = "\n".join([f"User: {m['user']}\nAssistant: {m['assistant']}" for m in history]) if history else ""
+    # Compose question with context
+    question_with_context = f"{context}\nUser: {msg}" if context else msg
+    # Get response from chain
+    result = chain.invoke(question_with_context)
+    # Save to memory
+    history.append({"user": msg, "assistant": result})
+    dialogue_memory[session_id] = history
     return result
 
 @app.get("/get-documents/", response_model=list[DocumentResponse])
